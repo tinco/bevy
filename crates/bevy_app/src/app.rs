@@ -1,5 +1,6 @@
 use crate::app_builder::AppBuilder;
 use bevy_ecs::{ParallelExecutor, Resources, Schedule, World};
+use std::collections::HashMap;
 
 #[allow(clippy::needless_doctest_main)]
 /// Containers of app logic and data
@@ -24,10 +25,10 @@ use bevy_ecs::{ParallelExecutor, Resources, Schedule, World};
 ///}
 /// ```
 pub struct App {
-    pub world: World,
-    pub resources: Resources,
+    pub world: Box<World>,
+    pub resources: Box<Resources>,
     pub runner: Box<dyn Fn(App)>,
-    pub schedule: Schedule,
+    pub schedules: HashMap<&'static str, Schedule>,
     pub executor: ParallelExecutor,
     pub startup_schedule: Schedule,
     pub startup_executor: ParallelExecutor,
@@ -38,7 +39,7 @@ impl Default for App {
         Self {
             world: Default::default(),
             resources: Default::default(),
-            schedule: Default::default(),
+            schedules: vec![("default", Default::default())].into_iter().collect(),
             executor: Default::default(),
             startup_schedule: Default::default(),
             startup_executor: ParallelExecutor::without_tracker_clears(),
@@ -57,9 +58,10 @@ impl App {
     }
 
     pub fn update(&mut self) {
-        self.schedule.initialize(&mut self.resources);
+        let mut schedule = self.schedules.get_mut("default").expect("A default schedule should exist");
+        schedule.initialize(&mut self.resources);
         self.executor
-            .run(&mut self.schedule, &mut self.world, &mut self.resources);
+            .run(&mut schedule, &mut self.world, &mut self.resources);
     }
 
     pub fn run(mut self) {
@@ -72,6 +74,30 @@ impl App {
 
         let runner = std::mem::replace(&mut self.runner, Box::new(run_once));
         (runner)(self);
+    }
+
+    pub fn run_schedule(&mut self, schedule_name: &'static str) {
+        self.schedules
+            .get_mut(schedule_name)
+            .unwrap_or_else(|| panic!("Schedule {} should exist.", schedule_name))
+            .run(&mut self.world, &mut self.resources)
+    }
+
+    // TODO if we remove this, also unbox world and resources
+    pub fn run_schedules(&mut self) {
+        for schedule in self.schedules.values_mut() {
+            schedule.run(&mut self.world, &mut self.resources);
+        }
+    }
+
+    pub fn schedule_mut(&mut self, schedule_name: &'static str) -> &mut Schedule {
+        self.schedules
+            .get_mut(schedule_name)
+            .unwrap_or_else(|| panic!("Schedule {} should exist.", schedule_name))
+    }
+
+    pub fn default_schedule_mut(&mut self) -> &mut Schedule {
+        self.schedules.get_mut("default").expect("A default schedule should exist")
     }
 }
 

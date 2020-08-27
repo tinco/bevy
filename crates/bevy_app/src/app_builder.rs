@@ -2,6 +2,7 @@ use crate::{
     app::{App, AppExit},
     event::Events,
     plugin::{dynamically_load_plugin, Plugin},
+    schedule_runner::{ScheduleRunnerPlugin},
     stage, startup_stage,
 };
 use bevy_ecs::{FromResources, IntoQuerySystem, Resources, System, World};
@@ -44,17 +45,30 @@ impl AppBuilder {
     }
 
     pub fn set_world(&mut self, world: World) -> &mut Self {
-        self.app.world = world;
+        self.app.world = Box::new(world);
+        self
+    }
+
+    pub fn add_schedule(&mut self, schedule_name: &'static str, mut schedule_runner: ScheduleRunnerPlugin) -> &mut Self {
+        self.app.schedules.insert(schedule_name, Default::default());
+        self.add_default_stages_to_schedule(schedule_name);
+        schedule_runner.schedule_name = schedule_name;
+        self.add_plugin(schedule_runner);
         self
     }
 
     pub fn add_stage(&mut self, stage_name: &'static str) -> &mut Self {
-        self.app.schedule.add_stage(stage_name);
+        self.app.default_schedule_mut().add_stage(stage_name);
+        self
+    }
+
+    pub fn add_stage_to_schedule(&mut self, schedule_name: &'static str, stage_name: &'static str) -> &mut Self {
+        self.app.schedule_mut(schedule_name).add_stage(stage_name);
         self
     }
 
     pub fn add_stage_after(&mut self, target: &'static str, stage_name: &'static str) -> &mut Self {
-        self.app.schedule.add_stage_after(target, stage_name);
+        self.app.default_schedule_mut().add_stage_after(target, stage_name);
         self
     }
 
@@ -63,7 +77,7 @@ impl AppBuilder {
         target: &'static str,
         stage_name: &'static str,
     ) -> &mut Self {
-        self.app.schedule.add_stage_before(target, stage_name);
+        self.app.default_schedule_mut().add_stage_before(target, stage_name);
         self
     }
 
@@ -78,6 +92,14 @@ impl AppBuilder {
 
     pub fn add_systems(&mut self, systems: Vec<Box<dyn System>>) -> &mut Self {
         self.add_systems_to_stage(stage::UPDATE, systems)
+    }
+
+    pub fn add_system_to_schedule(&mut self, schedule_name: &'static str, system: Box<dyn System>) -> &mut Self {
+        self.add_system_to_stage_on_schedule(schedule_name, stage::UPDATE, system)
+    }
+
+    pub fn add_systems_to_schedule(&mut self, schedule_name: &'static str, systems: Vec<Box<dyn System>>) -> &mut Self {
+        self.add_systems_to_stage_on_schedule(schedule_name, stage::UPDATE, systems)
     }
 
     pub fn init_system(
@@ -158,12 +180,21 @@ impl AppBuilder {
             .add_stage(stage::LAST)
     }
 
+    pub fn add_default_stages_to_schedule(&mut self, schedule_name: &'static str) -> &mut Self {
+        self.add_stage_to_schedule(schedule_name, stage::FIRST)
+            .add_stage_to_schedule(schedule_name, stage::EVENT_UPDATE)
+            .add_stage_to_schedule(schedule_name, stage::PRE_UPDATE)
+            .add_stage_to_schedule(schedule_name, stage::UPDATE)
+            .add_stage_to_schedule(schedule_name, stage::POST_UPDATE)
+            .add_stage_to_schedule(schedule_name, stage::LAST)
+    }
+
     pub fn add_system_to_stage(
         &mut self,
         stage_name: &'static str,
         system: Box<dyn System>,
     ) -> &mut Self {
-        self.app.schedule.add_system_to_stage(stage_name, system);
+        self.app.default_schedule_mut().add_system_to_stage(stage_name, system);
         self
     }
 
@@ -173,7 +204,7 @@ impl AppBuilder {
         system: Box<dyn System>,
     ) -> &mut Self {
         self.app
-            .schedule
+            .default_schedule_mut()
             .add_system_to_stage_front(stage_name, system);
         self
     }
@@ -184,7 +215,29 @@ impl AppBuilder {
         systems: Vec<Box<dyn System>>,
     ) -> &mut Self {
         for system in systems {
-            self.app.schedule.add_system_to_stage(stage_name, system);
+            self.app.default_schedule_mut().add_system_to_stage(stage_name, system);
+        }
+        self
+    }
+
+    pub fn add_system_to_stage_on_schedule(
+        &mut self,
+        schedule_name: &'static str,
+        stage_name: &'static str,
+        system: Box<dyn System>,
+    ) -> &mut Self {
+        self.app.schedule_mut(schedule_name).add_system_to_stage(stage_name, system);
+        self
+    }
+
+    pub fn add_systems_to_stage_on_schedule(
+        &mut self,
+        schedule_name: &'static str,
+        stage_name: &'static str,
+        systems: Vec<Box<dyn System>>,
+    ) -> &mut Self {
+        for system in systems {
+            self.app.schedule_mut(schedule_name).add_system_to_stage(stage_name, system);
         }
         self
     }
@@ -195,6 +248,16 @@ impl AppBuilder {
     {
         self.add_resource(Events::<T>::default())
             .add_system_to_stage(stage::EVENT_UPDATE, Events::<T>::update_system.system())
+    }
+
+    pub fn add_event_to_schedule<T>(&mut self, schedule_name: &'static str) -> &mut Self
+    where
+        T: Send + Sync + 'static,
+    {
+        self.add_resource(Events::<T>::default())
+            .app.schedule_mut(schedule_name)
+                .add_system_to_stage(stage::EVENT_UPDATE, Events::<T>::update_system.system());
+        self
     }
 
     pub fn add_resource<T>(&mut self, resource: T) -> &mut Self

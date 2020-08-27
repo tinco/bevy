@@ -126,6 +126,10 @@ name = "headless"
 path = "examples/app/headless.rs"
 
 [[example]]
+name = "multiple_schedulers"
+path = "examples/app/multiple_schedulers.rs"
+
+[[example]]
 name = "plugin"
 path = "examples/app/plugin.rs"
 
