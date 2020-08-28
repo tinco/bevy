@@ -6,6 +6,7 @@ use crate::{
     stage, startup_stage,
 };
 use bevy_ecs::{FromResources, IntoQuerySystem, Resources, System, World};
+use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 
 /// Configure [App]s using the builder pattern
 pub struct AppBuilder {
@@ -31,12 +32,12 @@ impl AppBuilder {
         }
     }
 
-    pub fn resources(&self) -> &Resources {
-        &self.app.resources
+    pub fn resources(&self) -> RwLockReadGuard<Resources> {
+        self.app.resources.read()
     }
 
-    pub fn resources_mut(&mut self) -> &mut Resources {
-        &mut self.app.resources
+    pub fn resources_mut(&mut self) -> RwLockWriteGuard<Resources> {
+        self.app.resources.write()
     }
 
     pub fn run(&mut self) {
@@ -45,7 +46,7 @@ impl AppBuilder {
     }
 
     pub fn set_world(&mut self, world: World) -> &mut Self {
-        self.app.world = Box::new(world);
+        *self.app.world.write() = world;
         self
     }
 
@@ -114,7 +115,7 @@ impl AppBuilder {
         stage: &'static str,
         mut build: impl FnMut(&mut Resources) -> Box<dyn System>,
     ) -> &mut Self {
-        let system = build(&mut self.app.resources);
+        let system = build(&mut self.app.resources.write());
         self.add_system_to_stage(stage, system)
     }
 
@@ -165,7 +166,7 @@ impl AppBuilder {
         stage: &'static str,
         mut build: impl FnMut(&mut Resources) -> Box<dyn System>,
     ) -> &mut Self {
-        let system = build(&mut self.app.resources);
+        let system = build(&mut self.app.resources.write());
         self.add_startup_system_to_stage(stage, system)
     }
 
@@ -264,7 +265,7 @@ impl AppBuilder {
     where
         T: Send + Sync + 'static,
     {
-        self.app.resources.insert(resource);
+        self.app.resources.write().insert(resource);
         self
     }
 
@@ -272,14 +273,9 @@ impl AppBuilder {
     where
         R: FromResources + Send + Sync + 'static,
     {
-        let resource = R::from_resources(&self.app.resources);
-        self.app.resources.insert(resource);
+        let resource = R::from_resources(&self.app.resources.read());
+        self.app.resources.write().insert(resource);
 
-        self
-    }
-
-    pub fn set_runner(&mut self, run_fn: impl Fn(App) + 'static) -> &mut Self {
-        self.app.runner = Box::new(run_fn);
         self
     }
 

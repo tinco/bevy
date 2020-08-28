@@ -1,6 +1,6 @@
 use crate::{
     resource::Resources,
-    schedule::ParallelExecutorOptions,
+    schedule::{ParallelExecutor, ParallelExecutorOptions},
     system::{System, SystemId, ThreadLocalExecution},
 };
 use bevy_hecs::World;
@@ -10,6 +10,48 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
+
+pub struct ScheduleContext {
+    pub schedule: Mutex<Schedule>,
+    pub executor: ParallelExecutor,
+    pub runner: Box<dyn Fn(&mut ScheduleContext, &mut World, &mut Resources)>,
+}
+
+unsafe impl Send for ScheduleContext {}
+unsafe impl Sync for ScheduleContext {}
+
+impl ScheduleContext {
+    pub fn run(&mut self, world: &mut World, resources: &mut Resources) {
+        let runner = std::mem::replace(&mut self.runner, Box::new(ScheduleContext::run_once));
+        (runner)(self, world, resources);
+    }
+
+    pub fn update(&mut self, world: &mut World, resources: &mut Resources) {
+        let mut schedule = self.schedule.lock();
+        schedule.initialize(resources);
+        self.executor.run(&mut schedule, world, resources);
+    }
+
+    pub fn run_once(&mut self, world: &mut World, resources: &mut Resources) {
+        let mut schedule = self.schedule.lock();
+        schedule.run_once(world, resources);
+    }
+
+    pub fn set_runner(&mut self, run_fn: impl Fn(&mut ScheduleContext, &mut World, &mut Resources) + 'static) -> &mut Self {
+        self.runner = Box::new(run_fn);
+        self
+    }
+}
+
+impl Default for ScheduleContext {
+     fn default() -> Self {
+        Self {
+            schedule: Default::default(),
+            runner: Box::new(ScheduleContext::run_once),
+            executor: Default::default(),
+        }
+    }
+}
 
 /// An ordered collection of stages, which each contain an ordered list of [System]s.
 /// Schedules are essentially the "execution plan" for an App's systems.
@@ -128,7 +170,7 @@ impl Schedule {
         self
     }
 
-    pub fn run(&mut self, world: &mut World, resources: &mut Resources) {
+    pub fn run_once(&mut self, world: &mut World, resources: &mut Resources) {
         for stage_name in self.stage_order.iter() {
             if let Some(stage_systems) = self.stages.get_mut(stage_name) {
                 for system in stage_systems.iter_mut() {

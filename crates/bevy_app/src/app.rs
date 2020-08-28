@@ -1,6 +1,8 @@
 use crate::app_builder::AppBuilder;
-use bevy_ecs::{ParallelExecutor, Resources, Schedule, World};
+use bevy_ecs::{Resources, Schedule, ScheduleContext, ParallelExecutor, World};
 use std::collections::HashMap;
+use rayon::prelude::*;
+use parking_lot::{RwLock, MutexGuard};
 
 #[allow(clippy::needless_doctest_main)]
 /// Containers of app logic and data
@@ -25,11 +27,9 @@ use std::collections::HashMap;
 ///}
 /// ```
 pub struct App {
-    pub world: Box<World>,
-    pub resources: Box<Resources>,
-    pub runner: Box<dyn Fn(App)>,
-    pub schedules: HashMap<&'static str, Schedule>,
-    pub executor: ParallelExecutor,
+    pub world: RwLock<World>,
+    pub resources: RwLock<Resources>,
+    pub schedules: HashMap<&'static str, ScheduleContext>,
     pub startup_schedule: Schedule,
     pub startup_executor: ParallelExecutor,
 }
@@ -40,16 +40,10 @@ impl Default for App {
             world: Default::default(),
             resources: Default::default(),
             schedules: vec![("default", Default::default())].into_iter().collect(),
-            executor: Default::default(),
             startup_schedule: Default::default(),
             startup_executor: ParallelExecutor::without_tracker_clears(),
-            runner: Box::new(run_once),
         }
     }
-}
-
-fn run_once(mut app: App) {
-    app.update();
 }
 
 impl App {
@@ -57,47 +51,45 @@ impl App {
         AppBuilder::default()
     }
 
-    pub fn update(&mut self) {
-        let mut schedule = self.schedules.get_mut("default").expect("A default schedule should exist");
-        schedule.initialize(&mut self.resources);
-        self.executor
-            .run(&mut schedule, &mut self.world, &mut self.resources);
-    }
 
     pub fn run(mut self) {
-        self.startup_schedule.initialize(&mut self.resources);
+        self.startup_schedule.initialize(&mut self.resources.write());
         self.startup_executor.run(
             &mut self.startup_schedule,
-            &mut self.world,
-            &mut self.resources,
+            &mut self.world.write(),
+            &mut self.resources.write(),
         );
 
-        let runner = std::mem::replace(&mut self.runner, Box::new(run_once));
-        (runner)(self);
+        let resources = &mut self.resources;
+        let world = &mut self.world;
+
+        self.schedules.par_iter_mut().for_each(|(_,schedule_context)| {
+            schedule_context.run(&mut world.write(), &mut resources.write());
+        })
     }
 
     pub fn run_schedule(&mut self, schedule_name: &'static str) {
         self.schedules
             .get_mut(schedule_name)
             .unwrap_or_else(|| panic!("Schedule {} should exist.", schedule_name))
-            .run(&mut self.world, &mut self.resources)
+            .run(&mut self.world.write(), &mut self.resources.write())
     }
 
-    // TODO if we remove this, also unbox world and resources
-    pub fn run_schedules(&mut self) {
-        for schedule in self.schedules.values_mut() {
-            schedule.run(&mut self.world, &mut self.resources);
-        }
+    pub fn schedule_mut(&mut self, schedule_name: &'static str) -> MutexGuard<Schedule> {
+        self.schedules
+            .get_mut(schedule_name)
+            .unwrap_or_else(|| panic!("Schedule {} should exist.", schedule_name))
+            .schedule.lock()
     }
 
-    pub fn schedule_mut(&mut self, schedule_name: &'static str) -> &mut Schedule {
+    pub fn schedule_context_mut(&mut self, schedule_name: &'static str) -> &mut ScheduleContext {
         self.schedules
             .get_mut(schedule_name)
             .unwrap_or_else(|| panic!("Schedule {} should exist.", schedule_name))
     }
 
-    pub fn default_schedule_mut(&mut self) -> &mut Schedule {
-        self.schedules.get_mut("default").expect("A default schedule should exist")
+    pub fn default_schedule_mut(&mut self) -> MutexGuard<Schedule> {
+        self.schedules.get_mut("default").expect("A default schedule should exist").schedule.lock()
     }
 }
 

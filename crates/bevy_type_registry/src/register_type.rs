@@ -21,7 +21,8 @@ impl RegisterType for AppBuilder {
         T: Properties + DeserializeProperty + Component + FromResources,
     {
         {
-            let type_registry = self.app.resources.get::<TypeRegistry>().unwrap();
+            let resources = self.app.resources.read();
+            let type_registry = resources.get::<TypeRegistry>().unwrap();
             type_registry.component.write().register::<T>();
             type_registry.property.write().register::<T>();
         }
@@ -33,7 +34,8 @@ impl RegisterType for AppBuilder {
         T: Properties + DeserializeProperty + Component + FromResources,
     {
         {
-            let type_registry = self.app.resources.get::<TypeRegistry>().unwrap();
+            let resources = self.app.resources.read();
+            let type_registry = resources.get::<TypeRegistry>().unwrap();
             type_registry.property.write().register::<T>();
         }
         self
@@ -44,7 +46,8 @@ impl RegisterType for AppBuilder {
         T: Property + DeserializeProperty,
     {
         {
-            let type_registry = self.app.resources.get::<TypeRegistry>().unwrap();
+            let resources = self.app.resources.read();
+            let type_registry = resources.get::<TypeRegistry>().unwrap();
             type_registry.property.write().register::<T>();
         }
         self

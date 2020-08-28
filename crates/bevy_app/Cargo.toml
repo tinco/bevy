@@ -13,6 +13,8 @@ keywords = ["bevy"]
 # bevy
 bevy_derive = { path = "../bevy_derive", version = "0.1" }
 bevy_ecs = { path = "../bevy_ecs", version = "0.1" }
+rayon = "1.3"
+parking_lot = "0.10"
 
 # other
 libloading = "0.6"

@@ -9,7 +9,6 @@ pub use winit_config::*;
 pub use winit_windows::*;
 
 use bevy_app::{prelude::*, AppExit};
-use bevy_ecs::Resources;
 use bevy_math::Vec2;
 use bevy_window::{
     CreateWindow, CursorMoved, Window, WindowCloseRequested, WindowCreated, WindowResized, Windows,
@@ -20,9 +19,19 @@ use winit::{
     event::{DeviceEvent, WindowEvent},
     event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
 };
+use bevy_ecs::{Resources, ScheduleContext, World};
 
-#[derive(Default)]
-pub struct WinitPlugin;
+pub struct WinitPlugin {
+    pub schedule_name: &'static str,
+}
+
+impl Default for WinitPlugin {
+    fn default() -> Self {
+        WinitPlugin {
+            schedule_name: "default",
+        }
+    }
+}
 
 impl Plugin for WinitPlugin {
     fn build(&self, app: &mut AppBuilder) {
@@ -31,7 +40,7 @@ impl Plugin for WinitPlugin {
             // stopping us. there are plans to remove the lifetime: https://github.com/rust-windowing/winit/pull/1456
             // .add_event::<winit::event::WindowEvent>()
             .init_resource::<WinitWindows>()
-            .set_runner(winit_runner);
+            .app.schedule_context_mut(self.schedule_name).set_runner(winit_runner);
     }
 }
 
@@ -78,21 +87,24 @@ where
     panic!("Run return is not supported on this platform!")
 }
 
-pub fn winit_runner(mut app: App) {
+pub fn winit_runner(
+    schedule_context: &mut ScheduleContext,
+    world: &mut World,
+    resources: &mut Resources
+) {
     let mut event_loop = EventLoop::new();
     let mut create_window_event_reader = EventReader::<CreateWindow>::default();
     let mut app_exit_event_reader = EventReader::<AppExit>::default();
 
     handle_create_window_events(
-        &mut app.resources,
+        &mut resources,
         &event_loop,
         &mut create_window_event_reader,
     );
 
     log::debug!("Entering winit event loop");
 
-    let should_return_from_run = app
-        .resources
+    let should_return_from_run = resources
         .get::<WinitConfig>()
         .map_or(false, |config| config.return_from_run);
 
@@ -105,7 +117,7 @@ pub fn winit_runner(mut app: App) {
             ControlFlow::Poll
         };
 
-        if let Some(app_exit_events) = app.resources.get_mut::<Events<AppExit>>() {
+        if let Some(app_exit_events) = resources.get_mut::<Events<AppExit>>() {
             if app_exit_event_reader.latest(&app_exit_events).is_some() {
                 *control_flow = ControlFlow::Exit;
             }
@@ -117,14 +129,14 @@ pub fn winit_runner(mut app: App) {
                 window_id: winit_window_id,
                 ..
             } => {
-                let winit_windows = app.resources.get_mut::<WinitWindows>().unwrap();
-                let mut windows = app.resources.get_mut::<Windows>().unwrap();
+                let winit_windows = resources.get_mut::<WinitWindows>().unwrap();
+                let mut windows = resources.get_mut::<Windows>().unwrap();
                 let window_id = winit_windows.get_window_id(winit_window_id).unwrap();
                 let mut window = windows.get_mut(window_id).unwrap();
                 window.width = size.width;
                 window.height = size.height;
 
-                let mut resize_events = app.resources.get_mut::<Events<WindowResized>>().unwrap();
+                let mut resize_events = resources.get_mut::<Events<WindowResized>>().unwrap();
                 resize_events.send(WindowResized {
                     id: window_id,
                     height: window.height as usize,
@@ -137,23 +149,23 @@ pub fn winit_runner(mut app: App) {
                 ..
             } => match event {
                 WindowEvent::CloseRequested => {
-                    let mut window_close_requested_events = app
-                        .resources
+                    let mut window_close_requested_events =
+                        resources
                         .get_mut::<Events<WindowCloseRequested>>()
                         .unwrap();
-                    let winit_windows = app.resources.get_mut::<WinitWindows>().unwrap();
+                    let winit_windows = resources.get_mut::<WinitWindows>().unwrap();
                     let window_id = winit_windows.get_window_id(winit_window_id).unwrap();
                     window_close_requested_events.send(WindowCloseRequested { id: window_id });
                 }
                 WindowEvent::KeyboardInput { ref input, .. } => {
                     let mut keyboard_input_events =
-                        app.resources.get_mut::<Events<KeyboardInput>>().unwrap();
+                        resources.get_mut::<Events<KeyboardInput>>().unwrap();
                     keyboard_input_events.send(converters::convert_keyboard_input(input));
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     let mut cursor_moved_events =
-                        app.resources.get_mut::<Events<CursorMoved>>().unwrap();
-                    let winit_windows = app.resources.get_mut::<WinitWindows>().unwrap();
+                        resources.get_mut::<Events<CursorMoved>>().unwrap();
+                    let winit_windows = resources.get_mut::<WinitWindows>().unwrap();
                     let window_id = winit_windows.get_window_id(winit_window_id).unwrap();
                     let window = winit_windows.get_window(window_id).unwrap();
                     let inner_size = window.inner_size();
@@ -166,7 +178,7 @@ pub fn winit_runner(mut app: App) {
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let mut mouse_button_input_events =
-                        app.resources.get_mut::<Events<MouseButtonInput>>().unwrap();
+                        resources.get_mut::<Events<MouseButtonInput>>().unwrap();
                     mouse_button_input_events.send(MouseButtonInput {
                         button: converters::convert_mouse_button(button),
                         state: converters::convert_element_state(state),
@@ -175,7 +187,7 @@ pub fn winit_runner(mut app: App) {
                 WindowEvent::MouseWheel { delta, .. } => match delta {
                     event::MouseScrollDelta::LineDelta(x, y) => {
                         let mut mouse_wheel_input_events =
-                            app.resources.get_mut::<Events<MouseWheel>>().unwrap();
+                            resources.get_mut::<Events<MouseWheel>>().unwrap();
                         mouse_wheel_input_events.send(MouseWheel {
                             unit: MouseScrollUnit::Line,
                             x,
@@ -184,7 +196,7 @@ pub fn winit_runner(mut app: App) {
                     }
                     event::MouseScrollDelta::PixelDelta(p) => {
                         let mut mouse_wheel_input_events =
-                            app.resources.get_mut::<Events<MouseWheel>>().unwrap();
+                            resources.get_mut::<Events<MouseWheel>>().unwrap();
                         mouse_wheel_input_events.send(MouseWheel {
                             unit: MouseScrollUnit::Pixel,
                             x: p.x as f32,
@@ -197,7 +209,7 @@ pub fn winit_runner(mut app: App) {
             event::Event::DeviceEvent { ref event, .. } => {
                 if let DeviceEvent::MouseMotion { delta } = event {
                     let mut mouse_motion_events =
-                        app.resources.get_mut::<Events<MouseMotion>>().unwrap();
+                        resources.get_mut::<Events<MouseMotion>>().unwrap();
                     mouse_motion_events.send(MouseMotion {
                         delta: Vec2::new(delta.0 as f32, delta.1 as f32),
                     });
@@ -205,11 +217,11 @@ pub fn winit_runner(mut app: App) {
             }
             event::Event::MainEventsCleared => {
                 handle_create_window_events(
-                    &mut app.resources,
+                    &mut resources,
                     event_loop,
                     &mut create_window_event_reader,
                 );
-                app.update();
+                schedule_context.update(world, resources);
             }
             _ => (),
         }
