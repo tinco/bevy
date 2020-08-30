@@ -1,15 +1,17 @@
 use super::{AppBuilder};
 use crate::{
-    app::AppExit,
+    app::{AppExit,ScheduleContext},
     event::{EventReader, Events},
     plugin::Plugin,
 };
 use std::{
     thread,
     time::{Duration, Instant},
+    sync::{Arc},
 };
 
-use bevy_ecs::{Resources, ScheduleContext, World};
+use bevy_ecs::{Resources, World};
+use parking_lot::{RwLock};
 
 /// Determines the method used to run an [App]'s `Schedule`
 #[derive(Copy, Clone, Debug)]
@@ -61,13 +63,8 @@ impl Plugin for ScheduleRunnerPlugin {
     fn build(&self, app: &mut AppBuilder) {
         let run_mode = self.run_mode;
         let schedule_context = app.app.schedule_context_mut(self.schedule_name);
-        // TODO make a system where multiple runners can co exist
-        // I think by having app have `runners` instead of just one
-        // and having each runner be an iterator returning the amount
-        // of time to wait until the next iteration or Nothing if it's
-        // done.
 
-        schedule_context.set_runner(move |schedule_context: &mut ScheduleContext, world: &mut World, resources: &mut Resources| {
+        schedule_context.set_runner(move |schedule_context: &mut ScheduleContext, world: Arc<RwLock<World>>, resources: Arc<RwLock<Resources>>| {
             let mut app_exit_event_reader = EventReader::<AppExit>::default();
             match run_mode {
                 RunMode::Once => {
@@ -75,19 +72,25 @@ impl Plugin for ScheduleRunnerPlugin {
                 }
                 RunMode::Loop { wait } => loop {
                     let start_time = Instant::now();
-
-                    if let Some(app_exit_events) = resources.get_mut::<Events<AppExit>>() {
-                        if app_exit_event_reader.latest(&app_exit_events).is_some() {
-                            break;
-                        }
+                    
+                    {
+                        let resources = resources.write();
+                        if let Some(app_exit_events) = resources.get_mut::<Events<AppExit>>() {
+                            if app_exit_event_reader.latest(&app_exit_events).is_some() {
+                                break;
+                            }
+                        };
                     }
 
-                    schedule_context.update(world, resources);
-
-                    if let Some(app_exit_events) = resources.get_mut::<Events<AppExit>>() {
-                        if app_exit_event_reader.latest(&app_exit_events).is_some() {
-                            break;
-                        }
+                    schedule_context.update(world.clone(), resources.clone());
+                    
+                    {
+                        let resources = resources.write();
+                        if let Some(app_exit_events) = resources.get_mut::<Events<AppExit>>() {
+                            if app_exit_event_reader.latest(&app_exit_events).is_some() {
+                                break;
+                            }
+                        };
                     }
 
                     let end_time = Instant::now();

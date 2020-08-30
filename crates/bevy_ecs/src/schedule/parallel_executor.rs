@@ -6,7 +6,7 @@ use crate::{
 use bevy_hecs::{ArchetypesGeneration, World};
 use crossbeam_channel::{Receiver, Sender};
 use fixedbitset::FixedBitSet;
-use parking_lot::Mutex;
+use parking_lot::{RwLock,Mutex};
 use rayon::ScopeFifo;
 use std::{ops::Range, sync::Arc};
 
@@ -43,7 +43,7 @@ impl ParallelExecutor {
         }
     }
 
-    pub fn run(&mut self, schedule: &mut Schedule, world: &mut World, resources: &mut Resources) {
+    pub fn run(&mut self, schedule: &mut Schedule, world: Arc<RwLock<World>>, resources: Arc<RwLock<Resources>>) {
         let schedule_generation = schedule.generation();
         let schedule_changed = schedule.generation() != self.last_schedule_generation;
         if schedule_changed {
@@ -54,11 +54,12 @@ impl ParallelExecutor {
         for (stage_name, executor_stage) in schedule.stage_order.iter().zip(self.stages.iter_mut())
         {
             if let Some(stage_systems) = schedule.stages.get_mut(stage_name) {
-                executor_stage.run(world, resources, stage_systems, schedule_changed);
+                executor_stage.run(world.clone(), resources.clone(), stage_systems, schedule_changed);
             }
         }
 
         if self.clear_trackers {
+            let mut world = world.write();
             world.clear_trackers();
         }
 
@@ -263,8 +264,8 @@ impl ExecutorStage {
         systems: &[Arc<Mutex<Box<dyn System>>>],
         run_ready_type: RunReadyType,
         scope: &ScopeFifo<'run>,
-        world: &'run World,
-        resources: &'run Resources,
+        world: Arc<RwLock<World>>,
+        resources: Arc<RwLock<Resources>>,
     ) -> RunReadyResult {
         // produce a system index iterator based on the passed in RunReadyType
         let mut all;
@@ -308,9 +309,17 @@ impl ExecutorStage {
                 // handle multi-threaded system
                 let sender = self.sender.clone();
                 self.running_systems.insert(system_index);
+
+                let world = world.clone();
+                let resources = resources.clone();
+
                 scope.spawn_fifo(move |_| {
                     let mut system = system.lock();
-                    system.run(world, resources);
+                    {
+                        let world = world.read();
+                        let resources = resources.read();
+                        system.run(&world, &resources);
+                    }
                     sender.send(system_index).unwrap();
                 });
 
@@ -323,8 +332,8 @@ impl ExecutorStage {
 
     pub fn run(
         &mut self,
-        world: &mut World,
-        resources: &mut Resources,
+        world_lock: Arc<RwLock<World>>,
+        resources_lock: Arc<RwLock<Resources>>,
         systems: &[Arc<Mutex<Box<dyn System>>>],
         schedule_changed: bool,
     ) {
@@ -349,8 +358,11 @@ impl ExecutorStage {
             }
         }
 
-        self.next_thread_local_index = 0;
-        self.prepare_to_next_thread_local(world, systems, schedule_changed);
+        {
+            let world = world_lock.read();
+            self.next_thread_local_index = 0;
+            self.prepare_to_next_thread_local(&world, systems, schedule_changed);
+        }
 
         self.finished_systems.clear();
         self.running_systems.clear();
@@ -369,8 +381,8 @@ impl ExecutorStage {
                 systems,
                 RunReadyType::Range(run_ready_system_index_range),
                 scope,
-                world,
-                resources,
+                world_lock.clone(),
+                resources_lock.clone(),
             );
         });
         loop {
@@ -383,12 +395,22 @@ impl ExecutorStage {
                 // if a thread local system is ready to run, run it exclusively on the main thread
                 let mut system = systems[thread_local_index].lock();
                 self.running_systems.insert(thread_local_index);
-                system.run(world, resources);
-                system.run_thread_local(world, resources);
+                
+                {
+                    let world = world_lock.read();
+                    let resources = resources_lock.read();
+                    system.run(&world, &resources);
+                }
+                {
+                    let mut world = world_lock.write();
+                    let mut resources = resources_lock.write();
+                    system.run_thread_local(&mut world, &mut resources);
+                }
                 self.finished_systems.insert(thread_local_index);
                 self.sender.send(thread_local_index).unwrap();
 
-                self.prepare_to_next_thread_local(world, systems, schedule_changed);
+                let world = world_lock.read();
+                self.prepare_to_next_thread_local(&world, systems, schedule_changed);
 
                 run_ready_result = RunReadyResult::Ok;
             } else {
@@ -406,8 +428,8 @@ impl ExecutorStage {
                             systems,
                             RunReadyType::Dependents(finished_system),
                             scope,
-                            world,
-                            resources,
+                            world_lock.clone(),
+                            resources_lock.clone(),
                         );
 
                         // if the next ready system is thread local, break out of this loop/rayon scope so it can be run
@@ -422,12 +444,16 @@ impl ExecutorStage {
         // "flush"
         for system in systems.iter() {
             let mut system = system.lock();
+            let mut world = world_lock.write();
+            let mut resources = resources_lock.write();
+
             match system.thread_local_execution() {
-                ThreadLocalExecution::NextFlush => system.run_thread_local(world, resources),
+                ThreadLocalExecution::NextFlush => system.run_thread_local(&mut world, &mut resources),
                 ThreadLocalExecution::Immediate => { /* already ran */ }
             }
         }
 
+        let world = world_lock.read();
         self.last_archetypes_generation = world.archetypes_generation();
     }
 }

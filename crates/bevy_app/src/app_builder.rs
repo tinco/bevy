@@ -2,7 +2,7 @@ use crate::{
     app::{App, AppExit},
     event::Events,
     plugin::{dynamically_load_plugin, Plugin},
-    schedule_runner::{ScheduleRunnerPlugin},
+    schedule_runner::ScheduleRunnerPlugin,
     stage, startup_stage,
 };
 use bevy_ecs::{FromResources, IntoQuerySystem, Resources, System, World};
@@ -51,7 +51,7 @@ impl AppBuilder {
     }
 
     pub fn add_schedule(&mut self, schedule_name: &'static str, mut schedule_runner: ScheduleRunnerPlugin) -> &mut Self {
-        self.app.schedules.insert(schedule_name, Default::default());
+        self.app.schedule_contexts.insert(schedule_name, Default::default());
         self.add_default_stages_to_schedule(schedule_name);
         schedule_runner.schedule_name = schedule_name;
         self.add_plugin(schedule_runner);

@@ -1,57 +1,15 @@
 use crate::{
     resource::Resources,
-    schedule::{ParallelExecutor, ParallelExecutorOptions},
+    schedule::{ParallelExecutorOptions},
     system::{System, SystemId, ThreadLocalExecution},
 };
 use bevy_hecs::World;
-use parking_lot::Mutex;
+use parking_lot::{Mutex,RwLock};
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
     sync::Arc,
 };
-
-pub struct ScheduleContext {
-    pub schedule: Mutex<Schedule>,
-    pub executor: ParallelExecutor,
-    pub runner: Box<dyn Fn(&mut ScheduleContext, &mut World, &mut Resources)>,
-}
-
-unsafe impl Send for ScheduleContext {}
-unsafe impl Sync for ScheduleContext {}
-
-impl ScheduleContext {
-    pub fn run(&mut self, world: &mut World, resources: &mut Resources) {
-        let runner = std::mem::replace(&mut self.runner, Box::new(ScheduleContext::run_once));
-        (runner)(self, world, resources);
-    }
-
-    pub fn update(&mut self, world: &mut World, resources: &mut Resources) {
-        let mut schedule = self.schedule.lock();
-        schedule.initialize(resources);
-        self.executor.run(&mut schedule, world, resources);
-    }
-
-    pub fn run_once(&mut self, world: &mut World, resources: &mut Resources) {
-        let mut schedule = self.schedule.lock();
-        schedule.run_once(world, resources);
-    }
-
-    pub fn set_runner(&mut self, run_fn: impl Fn(&mut ScheduleContext, &mut World, &mut Resources) + 'static) -> &mut Self {
-        self.runner = Box::new(run_fn);
-        self
-    }
-}
-
-impl Default for ScheduleContext {
-     fn default() -> Self {
-        Self {
-            schedule: Default::default(),
-            runner: Box::new(ScheduleContext::run_once),
-            executor: Default::default(),
-        }
-    }
-}
 
 /// An ordered collection of stages, which each contain an ordered list of [System]s.
 /// Schedules are essentially the "execution plan" for an App's systems.
@@ -170,33 +128,59 @@ impl Schedule {
         self
     }
 
-    pub fn run_once(&mut self, world: &mut World, resources: &mut Resources) {
+    pub fn run_once(&mut self, world: Arc<RwLock<World>>, resources: Arc<RwLock<Resources>>) {
         for stage_name in self.stage_order.iter() {
             if let Some(stage_systems) = self.stages.get_mut(stage_name) {
                 for system in stage_systems.iter_mut() {
                     let mut system = system.lock();
                     #[cfg(feature = "profiler")]
-                    crate::profiler_start(resources, system.name().clone());
-                    system.update_archetype_access(world);
+                    {
+                        let resources = resources.read();
+                        crate::profiler_start(&resources, system.name().clone());
+                    }
+                    {
+                        let world = world.read();
+                        system.update_archetype_access(&world);
+                    }
                     match system.thread_local_execution() {
-                        ThreadLocalExecution::NextFlush => system.run(world, resources),
+                        ThreadLocalExecution::NextFlush => {
+                            {
+                                let world = world.read();
+                                let resources = resources.read();
+                                system.run(&world, &resources);
+                            }                        },
                         ThreadLocalExecution::Immediate => {
-                            system.run(world, resources);
+                            {
+                                let world = world.read();
+                                let resources = resources.read();
+                                system.run(&world, &resources);
+                            }
                             // NOTE: when this is made parallel a full sync is required here
-                            system.run_thread_local(world, resources);
+                            // TODO: is this a full sync now?
+                            {
+                                let mut world = world.write();
+                                let mut resources = resources.write();
+                                system.run_thread_local(&mut world, &mut resources);
+                            }
                         }
                     }
                     #[cfg(feature = "profiler")]
-                    crate::profiler_stop(resources, system.name().clone());
+                    {
+                        let resources = resources.read();
+                        crate::profiler_stop(resources, system.name().clone());
+                    }
                 }
 
                 // "flush"
                 // NOTE: when this is made parallel a full sync is required here
+                // TODO: is this a full sync now?
                 for system in stage_systems.iter_mut() {
                     let mut system = system.lock();
                     match system.thread_local_execution() {
                         ThreadLocalExecution::NextFlush => {
-                            system.run_thread_local(world, resources)
+                            let mut world = world.write();
+                            let mut resources = resources.write();
+                            system.run_thread_local(&mut world, &mut resources)
                         }
                         ThreadLocalExecution::Immediate => { /* already ran immediate */ }
                     }
@@ -204,16 +188,16 @@ impl Schedule {
             }
         }
 
-        world.clear_trackers();
+        world.write().clear_trackers();
     }
 
     // TODO: move this code to ParallelExecutor
-    pub fn initialize(&mut self, resources: &mut Resources) {
+    pub fn initialize(&mut self, resources: Arc<RwLock<Resources>>) {
         if self.last_initialize_generation == self.generation {
             return;
         }
 
-        let thread_pool_builder = resources
+        let thread_pool_builder = resources.read()
             .get::<ParallelExecutorOptions>()
             .map(|options| (*options).clone())
             .unwrap_or_else(ParallelExecutorOptions::default)
@@ -225,7 +209,8 @@ impl Schedule {
         for stage in self.stages.values_mut() {
             for system in stage.iter_mut() {
                 let mut system = system.lock();
-                system.initialize(resources);
+                let mut resources = resources.write();
+                system.initialize(&mut resources);
             }
         }
 
