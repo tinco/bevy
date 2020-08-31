@@ -64,7 +64,7 @@ impl App {
         let resources = self.resources;
         let schedule_contexts = self.schedule_contexts;
         
-        schedule_contexts.into_iter().for_each(|(_, mut schedule_context)| {
+        schedule_contexts.into_iter().for_each(|(_, schedule_context)| {
             let world = world.clone();
             let resources = resources.clone();
             thread::spawn(move || {
@@ -93,7 +93,7 @@ impl App {
     }
 }
 
-type Runner = dyn Fn(&mut ScheduleContext, Arc<RwLock<World>>,Arc<RwLock<Resources>>) + Send;
+type Runner = dyn Fn(ScheduleContext, Arc<RwLock<World>>,Arc<RwLock<Resources>>) + Send;
 
 pub struct ScheduleContext {
     pub schedule: Mutex<Schedule>,
@@ -102,7 +102,7 @@ pub struct ScheduleContext {
 }
 
 impl ScheduleContext {
-    pub fn run(&mut self, world: Arc<RwLock<World>>, resources: Arc<RwLock<Resources>>) {
+    pub fn run(mut self, world: Arc<RwLock<World>>, resources: Arc<RwLock<Resources>>) {
         let runner = std::mem::replace(&mut self.runner, Box::new(ScheduleContext::run_once));
         (runner)(self, world, resources);
     }
@@ -113,11 +113,11 @@ impl ScheduleContext {
         self.executor.run(&mut schedule, world, resources);
     }
 
-    pub fn run_once(&mut self, world: Arc<RwLock<World>>, resources: Arc<RwLock<Resources>>) {
+    pub fn run_once(mut self, world: Arc<RwLock<World>>, resources: Arc<RwLock<Resources>>) {
         self.update(world, resources);
     }
 
-    pub fn set_runner(&mut self, run_fn: impl Fn(&mut ScheduleContext, Arc<RwLock<World>>,Arc<RwLock<Resources>>) + 'static + Send) -> &mut Self {
+    pub fn set_runner(&mut self, run_fn: impl Fn(ScheduleContext, Arc<RwLock<World>>,Arc<RwLock<Resources>>) + 'static + Send) -> &mut Self {
         self.runner = Box::new(run_fn);
         self
     }

@@ -1,4 +1,4 @@
-use super::{AppBuilder};
+use super::AppBuilder;
 use crate::{
     app::{AppExit,ScheduleContext},
     event::{EventReader, Events},
@@ -7,11 +7,11 @@ use crate::{
 use std::{
     thread,
     time::{Duration, Instant},
-    sync::{Arc},
+    sync::Arc,
 };
 
 use bevy_ecs::{Resources, World};
-use parking_lot::{RwLock};
+use parking_lot::RwLock;
 
 /// Determines the method used to run an [App]'s `Schedule`
 #[derive(Copy, Clone, Debug)]
@@ -64,7 +64,7 @@ impl Plugin for ScheduleRunnerPlugin {
         let run_mode = self.run_mode;
         let schedule_context = app.app.schedule_context_mut(self.schedule_name);
 
-        schedule_context.set_runner(move |schedule_context: &mut ScheduleContext, world: Arc<RwLock<World>>, resources: Arc<RwLock<Resources>>| {
+        schedule_context.set_runner(move |mut schedule_context: ScheduleContext, world: Arc<RwLock<World>>, resources: Arc<RwLock<Resources>>| {
             let mut app_exit_event_reader = EventReader::<AppExit>::default();
             match run_mode {
                 RunMode::Once => {
